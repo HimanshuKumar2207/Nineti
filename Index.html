@@ -1,0 +1,117 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "BLEDevice.h"
+#include "WiFi.h"
+
+// UUIDs for the service and characteristic
+#define SERVICE_UUID "12345678-1234-5678-1234-56789abcdef0"
+#define CHARACTERISTIC_UUID "12345678-1234-5678-1234-56789abcdef1"
+
+// WiFi credentials (default empty values)
+char ssid[32] = "";
+char password[64] = "";
+
+// Flag for WiFi connection status
+bool isWiFiConnected = false;
+
+// BLE Characteristic to receive data
+BLECharacteristic *pCharacteristic;
+BLEServer *pServer;
+
+// BLE Callback for handling connection/disconnection
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEDevice* device) {
+    Serial.println("Device connected");
+  }
+  void onDisconnect(BLEDevice* device) {
+    Serial.println("Device disconnected");
+  }
+};
+
+// BLE Characteristic callback for writing WiFi credentials
+class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    String value = pCharacteristic->getValue().c_str();
+    Serial.print("Received data: ");
+    Serial.println(value);
+
+    // Extract SSID and password from the received string "SSID:Password"
+    int separatorIndex = value.indexOf(':');
+    if (separatorIndex != -1) {
+      String ssidStr = value.substring(0, separatorIndex);
+      String passwordStr = value.substring(separatorIndex + 1);
+      ssidStr.toCharArray(ssid, sizeof(ssid));
+      passwordStr.toCharArray(password, sizeof(password));
+      
+      Serial.print("SSID: ");
+      Serial.println(ssid);
+      Serial.print("Password: ");
+      Serial.println(password);
+      
+      // Try connecting to WiFi
+      connectToWiFi();
+    }
+  }
+};
+
+// Function to connect to WiFi with a timeout
+void connectToWiFi() {
+  if (ssid[0] == '\0' || password[0] == '\0') {
+    Serial.println("Invalid WiFi credentials received.");
+    return;
+  }
+
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {  // Timeout after 30 attempts (15 seconds)
+    Serial.print(".");
+    delay(500);
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    // Successfully connected
+    Serial.println();
+    Serial.print("Connected to WiFi with IP: ");
+    Serial.println(WiFi.localIP());
+    isWiFiConnected = true;
+  } else {
+    Serial.println();
+    Serial.println("Failed to connect to WiFi. Check credentials or network.");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize BLE
+  BLEDevice::init("ESP32 WiFi Provisioning");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create a BLE Service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  // Create a BLE Characteristic for receiving WiFi credentials (SSID and password)
+  pCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+
+  // Start the service
+  pService->start();
+
+  // Start advertising the BLE service
+  BLEAdvertising *pAdvertising = pServer->getAdvertising();
+  pAdvertising->start();
+
+  Serial.println("Waiting for BLE connection to provision WiFi credentials...");
+}
+
+void loop() {
+  // Main loop is empty as BLE provisioning works asynchronously
+  delay(1000);
+}
